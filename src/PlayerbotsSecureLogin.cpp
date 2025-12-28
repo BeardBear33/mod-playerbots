@@ -1,6 +1,4 @@
 #include "ScriptMgr.h"
-#include "WorldSession.h"
-#include "WorldPacket.h"
 #include "Opcodes.h"
 #include "Player.h"
 #include "ObjectAccessor.h"
@@ -15,7 +13,7 @@ namespace
             return nullptr;
 
         Player* p = ObjectAccessor::FindPlayer(guid);
-        if (!p || !p->IsInWorld())
+        if (!p)
             return nullptr;
 
         PlayerbotAI* ai = GET_PLAYERBOT_AI(p);
@@ -25,53 +23,29 @@ namespace
         return p;
     }
 
-    static bool TryReadLoginGuid(WorldPacket& packet, ObjectGuid& outGuid)
-    {
-        auto const oldPos = packet.rpos();
-
-        if (packet.size() < oldPos + 8)
-        {
-            packet.rpos(oldPos);
-            return false;
-        }
-
-        ObjectGuid guid;
-        packet >> guid;
-
-        packet.rpos(oldPos);
-
-        outGuid = guid;
-        return true;
-    }
-
-    static bool ForceLogoutViaPlayerbotHolder(Player* target)
+    static void ForceLogoutViaPlayerbotHolder(Player* target)
     {
         if (!target)
-            return false;
+            return;
 
         PlayerbotAI* ai = GET_PLAYERBOT_AI(target);
-        if (!ai || ai->IsRealPlayer())
-            return false;
+        if (!ai)
+            return;
 
         if (Player* master = ai->GetMaster())
         {
-            if (master != target)
+            if (PlayerbotMgr* mgr = GET_PLAYERBOT_MGR(master))
             {
-                if (PlayerbotMgr* mgr = GET_PLAYERBOT_MGR(master))
-                {
-                    mgr->LogoutPlayerBot(target->GetGUID());
-                    return true;
-                }
+                mgr->LogoutPlayerBot(target->GetGUID());
+                return;
             }
         }
 
         if (sRandomPlayerbotMgr)
         {
             sRandomPlayerbotMgr->LogoutPlayerBot(target->GetGUID());
-            return true;
+            return;
         }
-
-        return false;
     }
 }
 
@@ -81,23 +55,22 @@ public:
     PlayerbotsSecureLoginServerScript()
         : ServerScript("PlayerbotsSecureLoginServerScript", { SERVERHOOK_CAN_PACKET_RECEIVE }) {}
 
-    bool CanPacketReceive(WorldSession* session, WorldPacket& packet) override
+    bool CanPacketReceive(WorldSession* /*session*/, WorldPacket& packet) override
     {
-        if (!session)
-            return true;
-
         if (packet.GetOpcode() != CMSG_PLAYER_LOGIN)
             return true;
 
+        auto const oldPos = packet.rpos();
         ObjectGuid loginGuid;
-        if (!TryReadLoginGuid(packet, loginGuid) || !loginGuid)
+        packet >> loginGuid;
+        packet.rpos(oldPos);
+
+        if (!loginGuid)
             return true;
 
         Player* existingAltbot = FindOnlineAltbotByGuid(loginGuid);
-        if (!existingAltbot)
-            return true;
-
-        ForceLogoutViaPlayerbotHolder(existingAltbot);
+        if (existingAltbot)
+            ForceLogoutViaPlayerbotHolder(existingAltbot);
 
         return true;
     }
